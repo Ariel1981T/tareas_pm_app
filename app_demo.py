@@ -131,7 +131,8 @@ if st.sidebar.button("Cambiar de usuario"):
     st.rerun()
 
 if usuario["rol"] in ("PM", "Admin"):
-    opciones_menu = ["Asignar tarea", "Aplazamientos pendientes", "Reporte por gerente", "Todas las tareas"]
+    opciones_menu = ["Dashboard de métricas", "Asignar tarea", "Aplazamientos pendientes",
+                      "Reporte por gerente", "Todas las tareas"]
 else:
     opciones_menu = ["Mis tareas", "Solicitar aplazamiento"]
 
@@ -146,7 +147,77 @@ def fila_tarea(t):
 
 
 # ==================================================================
-if seccion == "Asignar tarea":
+if seccion == "Dashboard de métricas":
+    st.subheader("Dashboard de métricas")
+
+    gerentes = [u for u in usuarios if u["rol"] == "Gerente"]
+
+    # ---- 1. % de efectividad por gerente --------------------------
+    st.markdown("#### % de efectividad por gerente")
+    st.caption("Tareas cerradas en tiempo ÷ total de tareas cerradas")
+    filas_efectividad = []
+    for g in gerentes:
+        cerradas = [t for t in tareas if t["gerente_id"] == g["id"] and t["estado"] == "Cerrada"]
+        if cerradas:
+            en_tiempo = [t for t in cerradas if t["fecha_real_termino"] <= t["fecha_vencimiento"]]
+            pct = round(100 * len(en_tiempo) / len(cerradas), 1)
+        else:
+            pct = 0
+        filas_efectividad.append({"Gerente": g["nombre"], "% Efectividad": pct, "Tareas cerradas": len(cerradas)})
+
+    df_efectividad = pd.DataFrame(filas_efectividad)
+    if not df_efectividad.empty:
+        c1, c2 = st.columns([2, 1])
+        c1.bar_chart(df_efectividad.set_index("Gerente")["% Efectividad"])
+        c2.dataframe(df_efectividad, hide_index=True, use_container_width=True)
+    else:
+        st.info("Aún no hay tareas cerradas para calcular efectividad.")
+
+    st.divider()
+
+    # ---- 2. Distribución por prioridad -----------------------------
+    st.markdown("#### Distribución de tareas por prioridad")
+    conteo_prioridad = {"Alta": 0, "Media": 0, "Baja": 0, "Sin clasificar": 0}
+    for t in tareas:
+        clave = t["prioridad"] if t["prioridad"] else "Sin clasificar"
+        conteo_prioridad[clave] = conteo_prioridad.get(clave, 0) + 1
+    df_prioridad = pd.DataFrame(
+        {"Prioridad": list(conteo_prioridad.keys()), "Tareas": list(conteo_prioridad.values())}
+    )
+    c1, c2 = st.columns([2, 1])
+    c1.bar_chart(df_prioridad.set_index("Prioridad")["Tareas"])
+    c2.dataframe(df_prioridad, hide_index=True, use_container_width=True)
+
+    st.divider()
+
+    # ---- 3. Antigüedad de tareas abiertas (aging) -------------------
+    st.markdown("#### Antigüedad de tareas abiertas vencidas (aging)")
+    st.caption("Días de atraso de las tareas que siguen abiertas y ya vencieron")
+    buckets = {"0-3 días": 0, "4-7 días": 0, "8+ días": 0}
+    tareas_vencidas_abiertas = [
+        t for t in tareas
+        if t["estado"] in ("Abierta", "Solicitud de cierre") and t["fecha_vencimiento"] < HOY
+    ]
+    for t in tareas_vencidas_abiertas:
+        dias_atraso = (HOY - t["fecha_vencimiento"]).days
+        if dias_atraso <= 3:
+            buckets["0-3 días"] += 1
+        elif dias_atraso <= 7:
+            buckets["4-7 días"] += 1
+        else:
+            buckets["8+ días"] += 1
+
+    if tareas_vencidas_abiertas:
+        df_aging = pd.DataFrame({"Rango de atraso": list(buckets.keys()), "Tareas": list(buckets.values())})
+        c1, c2 = st.columns([2, 1])
+        c1.bar_chart(df_aging.set_index("Rango de atraso")["Tareas"])
+        c2.dataframe(df_aging, hide_index=True, use_container_width=True)
+    else:
+        st.success("No hay tareas abiertas vencidas en este momento.")
+
+
+# ==================================================================
+elif seccion == "Asignar tarea":
     st.subheader("Asignar nueva tarea")
     gerentes = [u for u in usuarios if u["rol"] == "Gerente"]
     with st.form("nueva_tarea_demo"):
