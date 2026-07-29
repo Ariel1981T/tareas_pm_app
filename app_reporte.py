@@ -64,6 +64,24 @@ def obtener_servicio():
     return build("tasks", "v1", credentials=creds, cache_discovery=False)
 
 
+def mostrar_debug_credenciales():
+    """Muestra, de forma segura (sin exponer los valores completos), qué
+    credenciales está leyendo la app AHORA MISMO desde sus secrets — para
+    comparar contra Google Cloud Console sin adivinar."""
+    cfg = st.secrets.get("google_oauth", {})
+    cid = cfg.get("client_id", "(no encontrado)")
+    with st.expander("🔧 Ver qué credenciales está usando la app (debug)"):
+        st.code(f"client_id completo: {cid}", language="text")
+        st.code(f"client_secret: {cfg.get('client_secret', '(no encontrado)')[:8]}... "
+                f"(primeros 8 caracteres, {len(cfg.get('client_secret',''))} caracteres en total)",
+                language="text")
+        st.code(f"refresh_token: {cfg.get('refresh_token', '(no encontrado)')[:12]}... "
+                f"(primeros 12 caracteres, {len(cfg.get('refresh_token',''))} caracteres en total)",
+                language="text")
+        st.caption("Compara el client_id de arriba, carácter por carácter, contra el que ves "
+                   "en Google Cloud Console → Credenciales.")
+
+
 def parsear_fecha(valor_rfc3339):
     if not valor_rfc3339:
         return None
@@ -148,6 +166,8 @@ def generar_excel(df: pd.DataFrame) -> bytes:
 # --------------------------------------------------------------
 # UI
 # --------------------------------------------------------------
+mostrar_debug_credenciales()
+
 if st.button("🔄 Generar reporte"):
     with st.spinner("Leyendo listas de Google Tasks..."):
         try:
