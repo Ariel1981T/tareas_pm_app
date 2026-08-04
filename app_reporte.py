@@ -1,21 +1,30 @@
 """
 Reporte de Tareas · IMEMSA
 
-App de una sola pantalla: lee TODAS las listas de Google Tasks de la
-cuenta del Project Manager (una lista = un gerente) y genera un Excel
-descargable con el detalle completo.
+App de una sola pantalla: lee Google Tasks de la cuenta de CADA
+gerente (una cuenta por persona, cada una autorizada individualmente
+con su propio refresh_token) y genera un Excel consolidado.
 
 Es de SOLO LECTURA — nunca escribe ni modifica nada en Tasks.
 
-Requiere en .streamlit/secrets.toml:
+Requiere en .streamlit/secrets.toml (generado automáticamente por
+armar_secrets.py, ver ese script):
 
 [google_oauth]
 client_id = "..."
 client_secret = "..."
+
+[[gerentes]]
+nombre = "Rodrigo Herrera"
+refresh_token = "..."
+
+[[gerentes]]
+nombre = "Florentino Pérez"
 refresh_token = "..."
 """
 
 import io
+import time
 from datetime import datetime, date
 
 import streamlit as st
@@ -44,18 +53,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📊 Reporte de Tareas · IMEMSA")
-st.caption("Extrae todas las tareas de Google Tasks (una lista por gerente) y genera un Excel.")
+st.caption("Extrae las tareas de Google Tasks de cada gerente y genera un Excel consolidado.")
 
 
 # --------------------------------------------------------------
-# Conexión de solo lectura a Google Tasks
+# Conexión de solo lectura a Google Tasks, una por gerente
 # --------------------------------------------------------------
-@st.cache_resource
-def obtener_servicio():
+def obtener_servicio(refresh_token: str):
+    """Se reconstruye en cada llamada (no se cachea) para evitar reutilizar
+    una conexión de red que haya quedado rota (ej. error 'Broken pipe')."""
     cfg = st.secrets["google_oauth"]
     creds = Credentials(
         token=None,
-        refresh_token=cfg["refresh_token"],
+        refresh_token=refresh_token,
         client_id=cfg["client_id"],
         client_secret=cfg["client_secret"],
         token_uri="https://oauth2.googleapis.com/token",
@@ -66,20 +76,16 @@ def obtener_servicio():
 
 def mostrar_debug_credenciales():
     """Muestra, de forma segura (sin exponer los valores completos), qué
-    credenciales está leyendo la app AHORA MISMO desde sus secrets — para
-    comparar contra Google Cloud Console sin adivinar."""
-    cfg = st.secrets.get("google_oauth", {})
-    cid = cfg.get("client_id", "(no encontrado)")
+    credenciales está leyendo la app AHORA MISMO — para comparar contra
+    Google Cloud Console / gerentes_tokens.json sin adivinar."""
+    cfg_oauth = st.secrets.get("google_oauth", {})
+    gerentes = st.secrets.get("gerentes", [])
     with st.expander("🔧 Ver qué credenciales está usando la app (debug)"):
-        st.code(f"client_id completo: {cid}", language="text")
-        st.code(f"client_secret: {cfg.get('client_secret', '(no encontrado)')[:8]}... "
-                f"(primeros 8 caracteres, {len(cfg.get('client_secret',''))} caracteres en total)",
-                language="text")
-        st.code(f"refresh_token: {cfg.get('refresh_token', '(no encontrado)')[:12]}... "
-                f"(primeros 12 caracteres, {len(cfg.get('refresh_token',''))} caracteres en total)",
-                language="text")
-        st.caption("Compara el client_id de arriba, carácter por carácter, contra el que ves "
-                   "en Google Cloud Console → Credenciales.")
+        st.code(f"client_id completo: {cfg_oauth.get('client_id', '(no encontrado)')}", language="text")
+        st.write(f"**Gerentes configurados: {len(gerentes)}**")
+        for g in gerentes:
+            rt = g.get("refresh_token", "")
+            st.code(f"{g.get('nombre', '(sin nombre)')}: {rt[:12]}... ({len(rt)} caracteres)", language="text")
 
 
 def parsear_fecha(valor_rfc3339):
@@ -104,36 +110,63 @@ def calcular_semaforo(estado, fecha_vencimiento, fecha_completado, hoy=None):
     return "Sin fecha"
 
 
-@st.cache_data(ttl=120, show_spinner=False)
-def extraer_todas_las_tareas():
-    servicio = obtener_servicio()
-    listas = servicio.tasklists().list(maxResults=100).execute().get("items", [])
+def _extraer_tareas_de_cuenta(nombre_gerente: str, refresh_token: str):
+    """Extrae todas las tareas de UNA cuenta (todas sus listas)."""
+    ultimo_error = None
+    for intento in range(1, 4):
+        try:
+            servicio = obtener_servicio(refresh_token)
+            listas = servicio.tasklists().list(maxResults=100).execute().get("items", [])
 
-    filas = []
-    for lista in listas:
-        gerente = lista["title"]
-        pagina = None
-        while True:
-            resp = servicio.tasks().list(
-                tasklist=lista["id"], showCompleted=True, showHidden=True,
-                maxResults=100, pageToken=pagina,
-            ).execute()
-            for t in resp.get("items", []):
-                fecha_venc = parsear_fecha(t.get("due"))
-                fecha_completado = parsear_fecha(t.get("completed"))
-                filas.append({
-                    "Gerente": gerente,
-                    "Tarea": t.get("title", "(sin título)"),
-                    "Notas": t.get("notes", ""),
-                    "Fecha de vencimiento": fecha_venc,
-                    "Estado Google Tasks": "Completada" if t.get("status") == "completed" else "Pendiente",
-                    "Fecha de completado": fecha_completado,
-                    "Semáforo": calcular_semaforo(t.get("status"), fecha_venc, fecha_completado),
-                })
-            pagina = resp.get("nextPageToken")
-            if not pagina:
-                break
-    return pd.DataFrame(filas)
+            filas = []
+            for lista in listas:
+                pagina = None
+                while True:
+                    resp = servicio.tasks().list(
+                        tasklist=lista["id"], showCompleted=True, showHidden=True, showDeleted=False,
+                        maxResults=100, pageToken=pagina,
+                    ).execute()
+                    for t in resp.get("items", []):
+                        fecha_venc = parsear_fecha(t.get("due"))
+                        fecha_completado = parsear_fecha(t.get("completed"))
+                        filas.append({
+                            "Gerente": nombre_gerente,
+                            "Lista": lista["title"],
+                            "Tarea": t.get("title", "(sin título)"),
+                            "Notas": t.get("notes", ""),
+                            "Fecha de vencimiento": fecha_venc,
+                            "Estado Google Tasks": "Completada" if t.get("status") == "completed" else "Pendiente",
+                            "Fecha de completado": fecha_completado,
+                            "Semáforo": calcular_semaforo(t.get("status"), fecha_venc, fecha_completado),
+                        })
+                    pagina = resp.get("nextPageToken")
+                    if not pagina:
+                        break
+            return filas, None
+        except (BrokenPipeError, ConnectionError, OSError) as e:
+            ultimo_error = e
+            time.sleep(1.5 * intento)
+        except Exception as e:
+            return [], str(e)
+    return [], str(ultimo_error)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def extraer_todas_las_cuentas():
+    """Recorre TODOS los gerentes configurados y consolida sus tareas.
+    Si una cuenta falla, se reporta el error para esa cuenta pero se
+    sigue con las demás — un problema no tumba el reporte completo."""
+    gerentes = st.secrets.get("gerentes", [])
+    todas_las_filas = []
+    errores = []
+
+    for g in gerentes:
+        filas, error = _extraer_tareas_de_cuenta(g["nombre"], g["refresh_token"])
+        if error:
+            errores.append(f"{g['nombre']}: {error}")
+        todas_las_filas.extend(filas)
+
+    return pd.DataFrame(todas_las_filas), errores
 
 
 def generar_excel(df: pd.DataFrame) -> bytes:
@@ -142,14 +175,12 @@ def generar_excel(df: pd.DataFrame) -> bytes:
         df.to_excel(writer, sheet_name="Tareas", index=False)
         hoja = writer.sheets["Tareas"]
 
-        # Encabezado con estilo IMEMSA
         for col_idx, col_name in enumerate(df.columns, start=1):
             celda = hoja.cell(row=1, column=col_idx)
             celda.font = Font(name="Arial", bold=True, color="FFFFFF", size=11)
             celda.fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
             celda.alignment = Alignment(horizontal="center", vertical="center")
 
-        # Fuente Arial en todo el cuerpo + ancho de columna automático
         for col_idx, col_name in enumerate(df.columns, start=1):
             letra = get_column_letter(col_idx)
             max_len = max([len(str(col_name))] + [len(str(v)) for v in df[col_name].fillna("")])
@@ -169,17 +200,22 @@ def generar_excel(df: pd.DataFrame) -> bytes:
 mostrar_debug_credenciales()
 
 if st.button("🔄 Generar reporte"):
-    with st.spinner("Leyendo listas de Google Tasks..."):
+    n_gerentes = len(st.secrets.get("gerentes", []))
+    with st.spinner(f"Leyendo Google Tasks de {n_gerentes} cuenta(s)..."):
         try:
-            df = extraer_todas_las_tareas()
+            df, errores = extraer_todas_las_cuentas()
         except Exception as e:
-            st.error(f"No se pudo conectar con Google Tasks: {e}")
+            st.error(f"No se pudo generar el reporte: {e}")
             st.stop()
 
+    if errores:
+        for err in errores:
+            st.warning(f"⚠️ No se pudo leer la cuenta de {err}")
+
     if df.empty:
-        st.warning("No se encontraron tareas en ninguna lista.")
+        st.warning("No se encontraron tareas en ninguna cuenta.")
     else:
-        st.success(f"Se encontraron {len(df)} tareas en {df['Gerente'].nunique()} lista(s)/gerente(s).")
+        st.success(f"Se encontraron {len(df)} tareas de {df['Gerente'].nunique()} gerente(s).")
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         excel_bytes = generar_excel(df)
@@ -189,3 +225,4 @@ if st.button("🔄 Generar reporte"):
             file_name=f"reporte_tareas_{date.today().isoformat()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
