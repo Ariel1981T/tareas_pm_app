@@ -199,6 +199,16 @@ def generar_excel(df: pd.DataFrame) -> bytes:
 # --------------------------------------------------------------
 mostrar_debug_credenciales()
 
+LISTAS_PERMITIDAS_DEFAULT = ["AA", "AB", "BA", "BB"]
+
+st.markdown("**Filtro de categorías**")
+listas_seleccionadas = st.multiselect(
+    "Solo incluir tareas de estas listas/categorías:",
+    options=LISTAS_PERMITIDAS_DEFAULT,
+    default=LISTAS_PERMITIDAS_DEFAULT,
+    help="Las tareas en cualquier otra lista (ej. 'Mis tareas') se excluyen del reporte.",
+)
+
 if st.button("🔄 Generar reporte"):
     n_gerentes = len(st.secrets.get("gerentes", []))
     with st.spinner(f"Leyendo Google Tasks de {n_gerentes} cuenta(s)..."):
@@ -212,8 +222,16 @@ if st.button("🔄 Generar reporte"):
         for err in errores:
             st.warning(f"⚠️ No se pudo leer la cuenta de {err}")
 
+    # Filtrar solo las listas seleccionadas (AA, AB, BA, BB por default)
+    if not df.empty and listas_seleccionadas:
+        total_antes = len(df)
+        df = df[df["Lista"].isin(listas_seleccionadas)]
+        excluidas = total_antes - len(df)
+        if excluidas:
+            st.caption(f"({excluidas} tarea(s) excluida(s) por no estar en las categorías seleccionadas)")
+
     if df.empty:
-        st.warning("No se encontraron tareas en ninguna cuenta.")
+        st.warning("No se encontraron tareas en ninguna cuenta con las categorías seleccionadas.")
     else:
         st.success(f"Se encontraron {len(df)} tareas de {df['Gerente'].nunique()} gerente(s).")
         st.dataframe(df, use_container_width=True, hide_index=True)
