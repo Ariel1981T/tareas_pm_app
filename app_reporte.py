@@ -42,18 +42,42 @@ st.set_page_config(page_title="IMEMSA · Reporte de Tareas", page_icon="📊", l
 
 st.markdown("""
 <style>
-    h1, h2, h3 { color: #0D2B6E; }
+    .stApp { background-color: #f7f8fb; }
     div.stButton > button:first-child, div.stDownloadButton > button:first-child {
         background-color: #0D2B6E; color: white; border-radius: 6px; border: none;
+        font-weight: 600; padding: 0.55em 1.4em;
     }
     div.stButton > button:first-child:hover, div.stDownloadButton > button:first-child:hover {
-        background-color: #C41E2E;
+        background-color: #C41E2E; color: white;
+    }
+    .imemsa-header {
+        background: linear-gradient(135deg, #0D2B6E 0%, #123a8f 100%);
+        border-radius: 12px;
+        padding: 28px 32px;
+        margin-bottom: 28px;
+        box-shadow: 0 4px 14px rgba(13, 43, 110, 0.18);
+    }
+    .imemsa-header .eyebrow {
+        color: #9db3e8; font-size: 0.78em; font-weight: 700;
+        letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px;
+    }
+    .imemsa-header h1 {
+        color: white; font-size: 1.9em; font-weight: 800; margin: 0 0 6px 0;
+    }
+    .imemsa-header p {
+        color: #cfdaf5; font-size: 0.98em; margin: 0;
     }
 </style>
+
+<div class="imemsa-header">
+    <div class="eyebrow">IMEMSA · Planta</div>
+    <h1>📊 Reporte de Tareas por Gerente</h1>
+    <p>Consolida en un clic las tareas capturadas por cada gerente en Google Tasks,
+    con fechas, estatus y semáforo — listo para exportar a Excel.</p>
+</div>
 """, unsafe_allow_html=True)
 
-st.title("📊 Reporte de Tareas · IMEMSA")
-st.caption("Extrae las tareas de Google Tasks de cada gerente y genera un Excel consolidado.")
+_mostrar_debug = st.query_params.get("debug") == "1"
 
 
 # --------------------------------------------------------------
@@ -197,19 +221,25 @@ def generar_excel(df: pd.DataFrame) -> bytes:
 # --------------------------------------------------------------
 # UI
 # --------------------------------------------------------------
-mostrar_debug_credenciales()
+if _mostrar_debug:
+    mostrar_debug_credenciales()
 
 LISTAS_PERMITIDAS_DEFAULT = ["AA", "AB", "BA", "BB"]
 
-st.markdown("**Filtro de categorías**")
-listas_seleccionadas = st.multiselect(
-    "Solo incluir tareas de estas listas/categorías:",
-    options=LISTAS_PERMITIDAS_DEFAULT,
-    default=LISTAS_PERMITIDAS_DEFAULT,
-    help="Las tareas en cualquier otra lista (ej. 'Mis tareas') se excluyen del reporte.",
-)
+with st.container(border=True):
+    st.markdown("**📋 Categorías a incluir**")
+    listas_seleccionadas = st.multiselect(
+        "Solo se consolidan las tareas capturadas en estas listas:",
+        options=LISTAS_PERMITIDAS_DEFAULT,
+        default=LISTAS_PERMITIDAS_DEFAULT,
+        label_visibility="collapsed",
+        help="Las tareas en cualquier otra lista (ej. 'Mis tareas') se excluyen del reporte.",
+    )
 
-if st.button("🔄 Generar reporte"):
+st.write("")
+generar = st.button("🔄  Generar reporte", use_container_width=True)
+
+if generar:
     n_gerentes = len(st.secrets.get("gerentes", []))
     with st.spinner(f"Leyendo Google Tasks de {n_gerentes} cuenta(s)..."):
         try:
@@ -233,7 +263,7 @@ if st.button("🔄 Generar reporte"):
     if df.empty:
         st.warning("No se encontraron tareas en ninguna cuenta con las categorías seleccionadas.")
     else:
-        st.success(f"Se encontraron {len(df)} tareas de {df['Gerente'].nunique()} gerente(s).")
+        st.success(f"✅ Se encontraron **{len(df)} tareas** de **{df['Gerente'].nunique()} gerente(s)**.")
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         excel_bytes = generar_excel(df)
@@ -242,5 +272,5 @@ if st.button("🔄 Generar reporte"):
             data=excel_bytes,
             file_name=f"reporte_tareas_{date.today().isoformat()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
         )
-
