@@ -73,7 +73,7 @@ st.markdown("""
     <div class="eyebrow">GRUPO IMEMSA</div>
     <h1>📊 Reporte de Tareas por Gerente</h1>
     <p>Consolida en un clic las tareas capturadas por cada gerente en Google Tasks,
-    con fechas, estatus y semáforo — listo para exportar a Excel.</p>
+    con fechas, estatus y semáforo.</p>
 </div>
 """, unsafe_allow_html=True)
 
