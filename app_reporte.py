@@ -382,6 +382,108 @@ def generar_excel(df: pd.DataFrame) -> bytes:
 
 
 # --------------------------------------------------------------
+# Evaluación por periodo (reglas del Director)
+# --------------------------------------------------------------
+def calcular_evaluacion(estado, fecha_vencimiento, fecha_terminacion, inicio, fin):
+    """
+    Tareas pendientes:
+      - vencimiento <= fin del periodo -> "X" (debió cerrarse y no se cerró)
+      - vencimiento >  fin del periodo -> "N.A." (aún no le tocaba)
+    Tareas terminadas, se evalúan solo si:
+      (a) su vencimiento cae dentro del periodo, o
+      (b) se cerraron dentro del periodo Y su vencimiento era anterior al periodo
+      Si se evalúan: terminación <= vencimiento -> "OK", si no -> "X" (se cerró tarde)
+      Si no aplica ninguna condición -> "N.A."
+    """
+    if estado == "Pendiente":
+        if fecha_vencimiento is None:
+            return "N.A."
+        return "X" if fecha_vencimiento <= fin else "N.A."
+    elif estado == "Completada":
+        if fecha_vencimiento is None:
+            return "N.A."
+        aplica_regla1 = inicio <= fecha_vencimiento <= fin
+        aplica_regla2 = (
+            fecha_terminacion is not None
+            and inicio <= fecha_terminacion <= fin
+            and fecha_vencimiento < inicio
+        )
+        if aplica_regla1 or aplica_regla2:
+            if fecha_terminacion is None:
+                return "N.A."
+            return "OK" if fecha_terminacion <= fecha_vencimiento else "X"
+        return "N.A."
+    return "N.A."
+
+
+def generar_excel_evaluacion(df: pd.DataFrame, inicio: date, fin: date) -> bytes:
+    df_eval = df.copy()
+    df_eval["Evaluación"] = df_eval.apply(
+        lambda r: calcular_evaluacion(
+            r["Estado Google Tasks"], r["Fecha de vencimiento"], r["Fecha de completado"], inicio, fin
+        ),
+        axis=1,
+    )
+
+    # Resumen de cumplimiento por gerente (excluye N.A. del % de cumplimiento)
+    filas_resumen = []
+    for gerente, grupo in df_eval.groupby("Gerente"):
+        ok = (grupo["Evaluación"] == "OK").sum()
+        x = (grupo["Evaluación"] == "X").sum()
+        na = (grupo["Evaluación"] == "N.A.").sum()
+        evaluadas = ok + x
+        pct = round(100 * ok / evaluadas, 1) if evaluadas else "N/D"
+        filas_resumen.append({
+            "Gerente": gerente, "Evaluadas": evaluadas, "OK": ok, "X": x,
+            "N.A.": na, "% Cumplimiento": pct,
+        })
+    df_resumen = pd.DataFrame(filas_resumen).sort_values("Gerente")
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        columnas_detalle = ["Gerente", "Lista", "Tarea", "Fecha de vencimiento",
+                             "Estado Google Tasks", "Fecha de completado", "Evaluación"]
+        df_eval[columnas_detalle].to_excel(writer, sheet_name="Evaluación", index=False, startrow=5)
+        hoja = writer.sheets["Evaluación"]
+        hoja.sheet_view.showGridLines = False
+
+        hoja["A1"] = "Evaluación de Tareas por Gerente"
+        hoja["A1"].font = Font(name="Arial", size=16, bold=True, color=NAVY)
+        hoja["A2"] = f"Periodo evaluado: {inicio.strftime('%d/%m/%Y')} — {fin.strftime('%d/%m/%Y')}"
+        hoja["A2"].font = Font(name="Arial", size=11, color="6B7280")
+        hoja["A3"] = "Nota: la fecha de elaboración no está disponible (Google Tasks no la expone)."
+        hoja["A3"].font = Font(name="Arial", size=9, italic=True, color="9CA3AF")
+
+        for col_idx, col_name in enumerate(columnas_detalle, start=1):
+            celda = hoja.cell(row=6, column=col_idx)
+            celda.font = Font(name="Arial", bold=True, color="FFFFFF", size=10.5)
+            celda.fill = PatternFill(start_color=NAVY, end_color=NAVY, fill_type="solid")
+            celda.alignment = Alignment(horizontal="center", vertical="center")
+        for col_idx, col_name in enumerate(columnas_detalle, start=1):
+            letra = get_column_letter(col_idx)
+            valores = df_eval[col_name].fillna("")
+            max_len = max([len(str(col_name))] + [len(str(v)) for v in valores])
+            hoja.column_dimensions[letra].width = min(max_len + 3, 40)
+            for row_idx in range(7, len(df_eval) + 7):
+                hoja.cell(row=row_idx, column=col_idx).font = Font(name="Arial", size=10)
+        hoja.freeze_panes = "A7"
+        hoja.auto_filter.ref = f"A6:{get_column_letter(len(columnas_detalle))}{6 + len(df_eval)}"
+
+        # ---- Resumen de cumplimiento por gerente, a la derecha ----
+        col_resumen = len(columnas_detalle) + 2
+        hoja.cell(row=6, column=col_resumen, value="Resumen de cumplimiento por gerente").font = Font(
+            name="Arial", size=12, bold=True, color=NAVY
+        )
+        headers_r = list(df_resumen.columns)
+        filas_r = df_resumen.values.tolist()
+        _escribir_tabla(hoja, 7, col_resumen, headers_r, filas_r)
+        for j, ancho in enumerate([20, 12, 10, 10, 10, 16]):
+            hoja.column_dimensions[get_column_letter(col_resumen + j)].width = ancho
+
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------
 # UI
 # --------------------------------------------------------------
 if _mostrar_debug:
@@ -437,3 +539,49 @@ if generar:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
+
+st.write("")
+st.markdown("---")
+
+with st.container(border=True):
+    st.markdown("**🗓️ Evaluación de tareas por periodo**")
+    st.caption("Genera un reporte independiente con la evaluación de cumplimiento de cada gerente, "
+               "según las reglas del Director, para el rango de fechas que elijas.")
+    col1, col2 = st.columns(2)
+    fecha_inicio = col1.date_input("Fecha de inicio", value=date.today().replace(day=1))
+    fecha_termino = col2.date_input("Fecha de término", value=date.today())
+
+    generar_eval = st.button("📊  Generar evaluación", use_container_width=True)
+
+    if generar_eval:
+        if fecha_inicio > fecha_termino:
+            st.error("La fecha de inicio no puede ser posterior a la fecha de término.")
+        else:
+            n_gerentes = len(st.secrets.get("gerentes", []))
+            with st.spinner(f"Leyendo Google Tasks de {n_gerentes} cuenta(s)..."):
+                try:
+                    df_eval_base, errores_eval = extraer_todas_las_cuentas()
+                except Exception as e:
+                    st.error(f"No se pudo generar la evaluación: {e}")
+                    st.stop()
+
+            if errores_eval:
+                for err in errores_eval:
+                    st.warning(f"⚠️ No se pudo leer la cuenta de {err}")
+
+            if not df_eval_base.empty and listas_seleccionadas:
+                df_eval_base = df_eval_base[df_eval_base["Lista"].isin(listas_seleccionadas)]
+
+            if df_eval_base.empty:
+                st.warning("No hay tareas para evaluar con las categorías seleccionadas.")
+            else:
+                excel_eval_bytes = generar_excel_evaluacion(df_eval_base, fecha_inicio, fecha_termino)
+                st.success(f"✅ Evaluación generada para el periodo "
+                           f"{fecha_inicio.strftime('%d/%m/%Y')} – {fecha_termino.strftime('%d/%m/%Y')}.")
+                st.download_button(
+                    "⬇️ Descargar evaluación",
+                    data=excel_eval_bytes,
+                    file_name=f"evaluacion_{fecha_inicio.isoformat()}_a_{fecha_termino.isoformat()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
