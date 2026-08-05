@@ -31,8 +31,6 @@ import streamlit as st
 import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.chart import BarChart, PieChart, Reference
-from openpyxl.chart.label import DataLabelList
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -310,11 +308,15 @@ def generar_excel(df: pd.DataFrame) -> bytes:
 
         hoja_tareas.freeze_panes = "A2"
         hoja_tareas.auto_filter.ref = hoja_tareas.dimensions
+        hoja_tareas.sheet_view.showGridLines = False
 
         # ---------- Hoja 2: Dashboard -------------------------------------
         hoja_dash = writer.book.create_sheet("Dashboard", 0)  # la deja primera
-        for letra, ancho in zip("ABCDEFGH", [22, 16, 16, 16, 16, 18, 4, 4]):
+        for letra, ancho in zip("ABCDE", [22, 16, 16, 16, 16]):
             hoja_dash.column_dimensions[letra].width = ancho
+        hoja_dash.column_dimensions["F"].width = 17.17
+        hoja_dash.column_dimensions["G"].width = 17.33
+        hoja_dash.sheet_view.showGridLines = False
 
         hoja_dash["A1"] = "Dashboard Ejecutivo · Reporte de Tareas"
         hoja_dash["A1"].font = Font(name="Arial", size=16, bold=True, color=NAVY)
@@ -345,22 +347,7 @@ def generar_excel(df: pd.DataFrame) -> bytes:
         filas_g = df_g.values.tolist()
         fila_fin_tabla_g = _escribir_tabla(hoja_dash, fila, 1, headers_g, filas_g)
 
-        if len(filas_g):
-            chart = BarChart()
-            chart.title = "% Efectividad por gerente"
-            chart.y_axis.title = "%"
-            chart.style = 10
-            col_pct = headers_g.index("% Efectividad") + 1
-            col_nombre = headers_g.index("Gerente") + 1
-            data = Reference(hoja_dash, min_col=col_pct, min_row=fila, max_row=fila + len(filas_g))
-            cats = Reference(hoja_dash, min_col=col_nombre, min_row=fila + 1, max_row=fila + len(filas_g))
-            chart.add_data(data, titles_from_data=True)
-            chart.set_categories(cats)
-            chart.height, chart.width = 8, 16
-            chart.legend = None
-            hoja_dash.add_chart(chart, f"H{fila}")
-
-        fila = fila_fin_tabla_g + 12  # deja espacio para la gráfica de al lado
+        fila = fila_fin_tabla_g + 2
 
         # --- Tabla + gráfica: distribución por semáforo ---
         hoja_dash.cell(row=fila, column=1, value="Distribución por semáforo").font = Font(
@@ -371,19 +358,7 @@ def generar_excel(df: pd.DataFrame) -> bytes:
         filas_sem = [[k, v] for k, v in metricas["conteo_semaforo"].items()]
         fila = _escribir_tabla(hoja_dash, fila, 1, ["Semáforo / Estado", "Tareas"], filas_sem)
 
-        if filas_sem:
-            pie = PieChart()
-            pie.title = "Distribución por semáforo"
-            data = Reference(hoja_dash, min_col=2, min_row=fila_inicio_sem, max_row=fila_inicio_sem + len(filas_sem))
-            cats = Reference(hoja_dash, min_col=1, min_row=fila_inicio_sem + 1, max_row=fila_inicio_sem + len(filas_sem))
-            pie.add_data(data, titles_from_data=True)
-            pie.set_categories(cats)
-            pie.height, pie.width = 8, 12
-            pie.dataLabels = DataLabelList()
-            pie.dataLabels.showPercent = True
-            hoja_dash.add_chart(pie, f"H{fila_inicio_sem}")
-
-        fila += 2
+        fila += 1
 
         # --- Tabla: distribución por categoría ---
         hoja_dash.cell(row=fila, column=1, value="Tareas por categoría").font = Font(
