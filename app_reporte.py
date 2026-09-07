@@ -70,10 +70,10 @@ st.markdown("""
 </style>
 
 <div class="imemsa-header">
-    <div class="eyebrow">GRUPO IMEMSA</div>
+    <div class="eyebrow">IMEMSA · Planta</div>
     <h1>📊 Reporte de Tareas por Gerente</h1>
     <p>Consolida en un clic las tareas capturadas por cada gerente en Google Tasks,
-    con fechas, estatus y semáforo.</p>
+    con fechas, estatus y semáforo — listo para exportar a Excel.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -441,7 +441,7 @@ def generar_excel_evaluacion(df: pd.DataFrame, inicio: date, fin: date) -> bytes
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        columnas_detalle = ["Gerente", "Lista", "Tarea", "Fecha de vencimiento",
+        columnas_detalle = ["Gerente", "Lista", "Tarea", "Notas", "Fecha de vencimiento",
                              "Estado Google Tasks", "Fecha de completado", "Evaluación"]
         df_eval[columnas_detalle].to_excel(writer, sheet_name="Evaluación", index=False, startrow=5)
         hoja = writer.sheets["Evaluación"]
@@ -546,7 +546,7 @@ st.markdown("---")
 with st.container(border=True):
     st.markdown("**🗓️ Evaluación de tareas por periodo**")
     st.caption("Genera un reporte independiente con la evaluación de cumplimiento de cada gerente, "
-               "para el rango de fechas que elijas.")
+               "según las reglas del Director, para el rango de fechas que elijas.")
     col1, col2 = st.columns(2)
     fecha_inicio = col1.date_input("Fecha de inicio", value=date.today().replace(day=1))
     fecha_termino = col2.date_input("Fecha de término", value=date.today())
