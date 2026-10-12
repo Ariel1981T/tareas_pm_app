@@ -439,11 +439,17 @@ def generar_excel_evaluacion(df: pd.DataFrame, inicio: date, fin: date) -> bytes
         })
     df_resumen = pd.DataFrame(filas_resumen).sort_values("Gerente")
 
+    # La tabla principal solo debe mostrar las tareas que SÍ aplican al
+    # periodo (Evaluación == "OK" o "X"); las "N.A." (no les tocaba en
+    # este periodo) se excluyen de la tabla pero siguen contándose en
+    # el resumen de cumplimiento por gerente, a la derecha.
+    df_detalle = df_eval[df_eval["Evaluación"] != "N.A."].copy()
+
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         columnas_detalle = ["Gerente", "Lista", "Tarea", "Notas", "Fecha de vencimiento",
                              "Estado Google Tasks", "Fecha de completado", "Evaluación"]
-        df_eval[columnas_detalle].to_excel(writer, sheet_name="Evaluación", index=False, startrow=5)
+        df_detalle[columnas_detalle].to_excel(writer, sheet_name="Evaluación", index=False, startrow=5)
         hoja = writer.sheets["Evaluación"]
         hoja.sheet_view.showGridLines = False
 
@@ -451,7 +457,8 @@ def generar_excel_evaluacion(df: pd.DataFrame, inicio: date, fin: date) -> bytes
         hoja["A1"].font = Font(name="Arial", size=16, bold=True, color=NAVY)
         hoja["A2"] = f"Periodo evaluado: {inicio.strftime('%d/%m/%Y')} — {fin.strftime('%d/%m/%Y')}"
         hoja["A2"].font = Font(name="Arial", size=11, color="6B7280")
-        hoja["A3"] = "Nota: la fecha de elaboración no está disponible (Google Tasks no la expone)."
+        hoja["A3"] = ("Nota: solo se listan las tareas que aplican al periodo (OK o X). "
+                       "La fecha de elaboración no está disponible (Google Tasks no la expone).")
         hoja["A3"].font = Font(name="Arial", size=9, italic=True, color="9CA3AF")
 
         for col_idx, col_name in enumerate(columnas_detalle, start=1):
@@ -461,13 +468,13 @@ def generar_excel_evaluacion(df: pd.DataFrame, inicio: date, fin: date) -> bytes
             celda.alignment = Alignment(horizontal="center", vertical="center")
         for col_idx, col_name in enumerate(columnas_detalle, start=1):
             letra = get_column_letter(col_idx)
-            valores = df_eval[col_name].fillna("")
+            valores = df_detalle[col_name].fillna("")
             max_len = max([len(str(col_name))] + [len(str(v)) for v in valores])
             hoja.column_dimensions[letra].width = min(max_len + 3, 40)
-            for row_idx in range(7, len(df_eval) + 7):
+            for row_idx in range(7, len(df_detalle) + 7):
                 hoja.cell(row=row_idx, column=col_idx).font = Font(name="Arial", size=10)
         hoja.freeze_panes = "A7"
-        hoja.auto_filter.ref = f"A6:{get_column_letter(len(columnas_detalle))}{6 + len(df_eval)}"
+        hoja.auto_filter.ref = f"A6:{get_column_letter(len(columnas_detalle))}{6 + len(df_detalle)}"
 
         # ---- Resumen de cumplimiento por gerente, a la derecha ----
         col_resumen = len(columnas_detalle) + 2
